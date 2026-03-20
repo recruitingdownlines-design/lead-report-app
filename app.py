@@ -375,9 +375,10 @@ def log_report_run(
             missing_emails
         ]
 
-        sheet.append_row(new_row)
+        sheet.append_row(new_row, value_input_option="USER_ENTERED")
+
     except Exception as e:
-        st.warning(f"Run completed, but log could not be written to Google Sheets: {e}")
+        st.warning(f"Run completed, but log could not be written to Google Sheets: {str(e)}")
 
 
 def send_vendor_emails(vendor_files, sender_email, gmail_app_password, test_mode, test_email, report_name):
