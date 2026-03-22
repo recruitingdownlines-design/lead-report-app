@@ -4,6 +4,7 @@ import zipfile
 import pandas as pd
 import streamlit as st
 import gspread
+import matplotlib.pyplot as plt
 from email.message import EmailMessage
 from google.oauth2.service_account import Credentials
 
@@ -376,7 +377,32 @@ def log_report_run(
     ]
 
     sheet.append_row(new_row, value_input_option="USER_ENTERED")
-    st.success("Run successfully logged to Google Sheets.")
+
+
+def load_dashboard_logs():
+    try:
+        gc = get_gsheet_client()
+        sheet = gc.open_by_key(GSHEET_ID).worksheet("logs")
+        records = sheet.get_all_records()
+        if not records:
+            return pd.DataFrame(columns=[
+                "Timestamp", "ReportType", "TotalRows", "PayableLeads",
+                "Centers", "EmailsSent", "Mode", "MissingEmails"
+            ])
+        df = pd.DataFrame(records)
+        if "Timestamp" in df.columns:
+            df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+        numeric_cols = ["TotalRows", "PayableLeads", "Centers", "EmailsSent", "MissingEmails"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        return df
+    except Exception as e:
+        st.warning(f"Could not load dashboard stats from Google Sheets: {e}")
+        return pd.DataFrame(columns=[
+            "Timestamp", "ReportType", "TotalRows", "PayableLeads",
+            "Centers", "EmailsSent", "Mode", "MissingEmails"
+        ])
 
 
 def send_vendor_emails(vendor_files, sender_email, gmail_app_password, test_mode, test_email, report_name):
@@ -467,6 +493,17 @@ def render_upload_instructions(report_name, expected_type):
 def render_excel_tab_requirements(report_name):
     if report_name in ["CGM Report", "Med Advantage Report"]:
         st.caption("Expected workbook tabs: **Detail** and ideally **Conversion Stats**.")
+
+
+def make_bar_chart(series, title, xlabel, ylabel):
+    fig, ax = plt.subplots(figsize=(7, 4))
+    series.plot(kind="bar", ax=ax)
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    plt.xticks(rotation=20, ha="right")
+    plt.tight_layout()
+    return fig
 
 
 # =========================
@@ -592,6 +629,15 @@ def dashboard_card(title, subtitle, button_text, page_key):
 
 
 def render_dashboard():
+    logs_df = load_dashboard_logs()
+
+    total_runs = int(len(logs_df)) if not logs_df.empty else 0
+    total_emails = int(logs_df["EmailsSent"].sum()) if "EmailsSent" in logs_df.columns and not logs_df.empty else 0
+    total_payable = int(logs_df["PayableLeads"].sum()) if "PayableLeads" in logs_df.columns and not logs_df.empty else 0
+    last_run = "N/A"
+    if "Timestamp" in logs_df.columns and not logs_df.empty and logs_df["Timestamp"].notna().any():
+        last_run = logs_df["Timestamp"].max().strftime("%Y-%m-%d %H:%M")
+
     st.markdown(
         """
         <div style="font-size: 28px; font-weight: 800; color: #111827; margin-bottom: 6px;">
@@ -604,13 +650,15 @@ def render_dashboard():
         unsafe_allow_html=True
     )
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     with m1:
-        metric_card("Available Workflows", 3)
+        metric_card("Total Runs", total_runs)
     with m2:
-        metric_card("Email CC", "Erica")
+        metric_card("Emails Sent", total_emails)
     with m3:
-        metric_card("Portal Status", "Live")
+        metric_card("Payable Leads", total_payable)
+    with m4:
+        metric_card("Last Run", last_run)
 
     st.markdown("### Report Workflows")
 
@@ -636,6 +684,31 @@ def render_dashboard():
             "Open Med Advantage Report",
             "medadv"
         )
+
+    st.markdown("### Analytics")
+
+    if logs_df.empty:
+        st.info("No dashboard history found yet. Run and send at least one report to populate analytics.")
+        return
+
+    chart1_col, chart2_col = st.columns(2)
+
+    with chart1_col:
+        if "ReportType" in logs_df.columns:
+            runs_by_report = logs_df.groupby("ReportType").size().sort_values(ascending=False)
+            fig1 = make_bar_chart(runs_by_report, "Runs by Report Type", "Report", "Runs")
+            st.pyplot(fig1)
+
+    with chart2_col:
+        if "ReportType" in logs_df.columns and "EmailsSent" in logs_df.columns:
+            emails_by_report = logs_df.groupby("ReportType")["EmailsSent"].sum().sort_values(ascending=False)
+            fig2 = make_bar_chart(emails_by_report, "Emails Sent by Report", "Report", "Emails Sent")
+            st.pyplot(fig2)
+
+    st.markdown("### Recent Activity")
+    recent_cols = [col for col in ["Timestamp", "ReportType", "TotalRows", "PayableLeads", "Centers", "EmailsSent", "Mode", "MissingEmails"] if col in logs_df.columns]
+    recent_df = logs_df.sort_values(by="Timestamp", ascending=False).head(10)[recent_cols]
+    st.dataframe(recent_df, width="stretch")
 
 
 # =========================
@@ -1001,6 +1074,7 @@ def render_report_page(report_key, report_name, identifier_label, file_type, nee
                                 mode="TEST" if test_mode else "LIVE",
                                 missing_emails=len(missing_email_df)
                             )
+                            st.rerun()
                         except Exception as log_error:
                             st.warning(f"Run completed, but log could not be written to Google Sheets: {log_error}")
 
