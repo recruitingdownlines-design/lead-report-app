@@ -697,7 +697,7 @@ def render_center_profiles_page():
             Center Profiles
         </div>
         <div style="font-size: 15px; color: #6b7280; margin-top: 4px; margin-bottom: 16px;">
-            Master directory for all centers, contacts, notes, and report identifiers.
+            Manage all call centers, contacts, and report identifiers.
         </div>
         """,
         unsafe_allow_html=True
@@ -705,69 +705,187 @@ def render_center_profiles_page():
 
     profiles_df = load_center_profiles()
 
-    st.info(
-        "This page is the master source for center information. "
-        "Each center can store contact details, payment notes, and unique identifiers for CGM, ECP, BGM, and Med Advantage."
-    )
+    # =========================
+    # ➕ ADD NEW CENTER FORM
+    # =========================
+    with st.expander("➕ Add New Center", expanded=False):
+        col1, col2, col3 = st.columns(3)
 
-    search_col1, search_col2 = st.columns([1, 4])
-    with search_col1:
-        search_text = st.text_input("Search centers")
+        with col1:
+            center_name = st.text_input("Center Name")
+            country = st.text_input("Country")
+            contact = st.text_input("Contact Person")
+            email = st.text_input("Team Email")
 
-    if search_text.strip():
-        mask = profiles_df.apply(
-            lambda col: col.astype(str).str.contains(search_text, case=False, na=False)
-        ).any(axis=1)
-        display_df = profiles_df[mask].copy()
-    else:
-        display_df = profiles_df.copy()
+        with col2:
+            cgm_id = st.text_input("CGM Identifier")
+            ecp_id = st.text_input("ECP Identifier")
+            ma_id = st.text_input("Med Adv Identifier")
 
-    edited_df = st.data_editor(
-        display_df,
-        width="stretch",
-        num_rows="dynamic",
-        key="center_profiles_editor"
-    )
+        with col3:
+            phone = st.text_input("Phone")
+            payment = st.text_input("Payment Method")
+            notes = st.text_area("Notes")
 
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button("Save Center Profiles", width="stretch"):
-            base_df = load_center_profiles()
+        active = st.checkbox("Active", value=True)
 
-            if search_text.strip():
-                other_rows = base_df.loc[~base_df.index.isin(display_df.index)].copy()
-                combined = pd.concat([other_rows, edited_df], ignore_index=True)
+        if st.button("Save New Center"):
+            if not center_name.strip():
+                st.error("Center Name is required")
             else:
-                combined = edited_df.copy()
+                new_row = {
+                    "CenterName": center_name,
+                    "Country": country,
+                    "Phone": phone,
+                    "ContactPerson": contact,
+                    "TeamEmail": email,
+                    "PaymentSource": payment,
+                    "CGMIdentifier": cgm_id,
+                    "ECPIdentifier": ecp_id,
+                    "MAIdentifier": ma_id,
+                    "Notes": notes,
+                    "Active": "Yes" if active else "No"
+                }
 
-            for col in CENTER_PROFILE_HEADERS:
-                if col not in combined.columns:
-                    combined[col] = ""
+                updated_df = pd.concat([profiles_df, pd.DataFrame([new_row])], ignore_index=True)
 
-            combined = combined[CENTER_PROFILE_HEADERS].fillna("")
-            combined["CenterName"] = combined["CenterName"].apply(normalize_text)
-            combined = combined[combined["CenterName"] != ""]
-            combined = combined.drop_duplicates(subset=["CenterName"], keep="last")
+                save_center_profiles(updated_df)
+                st.success("Center added successfully")
+                st.rerun()
 
-            save_center_profiles(combined)
-            st.success("Center profiles saved to Google Sheets.")
+    st.markdown("### 📇 Center Directory")
+
+    if profiles_df.empty:
+        st.info("No centers yet. Add your first center above.")
+        return
+
+    # =========================
+    # 🔍 SEARCH
+    # =========================
+    search = st.text_input("Search centers")
+
+    if search:
+        mask = profiles_df.apply(
+            lambda col: col.astype(str).str.contains(search, case=False, na=False)
+        ).any(axis=1)
+        profiles_df = profiles_df[mask]
+
+    # =========================
+    # 🧾 PROFILE CARDS
+    # =========================
+    for i, row in profiles_df.iterrows():
+        with st.container():
+            st.markdown(
+                f"""
+                <div style="
+                    background: white;
+                    border: 1px solid #e5e7eb;
+                    border-radius: 16px;
+                    padding: 18px;
+                    margin-bottom: 14px;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.04);">
+
+                    <div style="font-size:18px;font-weight:800;">
+                        {row['CenterName']}
+                    </div>
+
+                    <div style="font-size:13px;color:#6b7280;margin-top:4px;">
+                        {row.get('Country','')} • {row.get('ContactPerson','')}
+                    </div>
+
+                    <div style="margin-top:8px;font-size:13px;">
+                        📧 {row.get('TeamEmail','')}
+                    </div>
+
+                    <div style="margin-top:8px;font-size:12px;color:#374151;">
+                        CGM: {row.get('CGMIdentifier','')} |
+                        ECP: {row.get('ECPIdentifier','')} |
+                        MA: {row.get('MAIdentifier','')}
+                    </div>
+
+                    <div style="margin-top:8px;font-size:12px;color:#6b7280;">
+                        {row.get('Notes','')}
+                    </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            c1, c2 = st.columns([1,1])
+
+            # ✏️ EDIT BUTTON
+            with c1:
+                if st.button("Edit", key=f"edit_{i}"):
+                    st.session_state["edit_index"] = i
+
+            # ❌ DELETE BUTTON
+            with c2:
+                if st.button("Delete", key=f"delete_{i}"):
+                    new_df = profiles_df.drop(index=i)
+                    save_center_profiles(new_df)
+                    st.warning("Center deleted")
+                    st.rerun()
+
+    # =========================
+    # ✏️ EDIT FORM
+    # =========================
+    if "edit_index" in st.session_state:
+        idx = st.session_state["edit_index"]
+        row = profiles_df.loc[idx]
+
+        st.markdown("### ✏️ Edit Center")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            center_name = st.text_input("Center Name", value=row["CenterName"])
+            country = st.text_input("Country", value=row.get("Country",""))
+            contact = st.text_input("Contact", value=row.get("ContactPerson",""))
+            email = st.text_input("Email", value=row.get("TeamEmail",""))
+
+        with col2:
+            cgm_id = st.text_input("CGM ID", value=row.get("CGMIdentifier",""))
+            ecp_id = st.text_input("ECP ID", value=row.get("ECPIdentifier",""))
+            ma_id = st.text_input("MA ID", value=row.get("MAIdentifier",""))
+
+        with col3:
+            phone = st.text_input("Phone", value=row.get("Phone",""))
+            payment = st.text_input("Payment", value=row.get("PaymentSource",""))
+            notes = st.text_area("Notes", value=row.get("Notes",""))
+
+        active = st.checkbox("Active", value=(row.get("Active","Yes")=="Yes"))
+
+        if st.button("Save Changes"):
+            profiles_df.loc[idx] = {
+                "CenterName": center_name,
+                "Country": country,
+                "Phone": phone,
+                "ContactPerson": contact,
+                "TeamEmail": email,
+                "PaymentSource": payment,
+                "CGMIdentifier": cgm_id,
+                "ECPIdentifier": ecp_id,
+                "MAIdentifier": ma_id,
+                "Notes": notes,
+                "Active": "Yes" if active else "No"
+            }
+
+            save_center_profiles(profiles_df)
+            st.success("Updated successfully")
+            del st.session_state["edit_index"]
             st.rerun()
 
-    with b2:
-        st.download_button(
-            label="Download Center Profiles CSV",
-            data=profiles_df.to_csv(index=False).encode("utf-8"),
-            file_name="center_profiles.csv",
-            mime="text/csv",
-            width="stretch"
-        )
+    # =========================
+    # 🧾 TABLE (ADVANCED USERS)
+    # =========================
+    with st.expander("🧾 Advanced Table Editor"):
+        edited_df = st.data_editor(profiles_df, num_rows="dynamic")
 
-    st.markdown("### Profile Notes Guidance")
-    st.caption(
-        "Use the Notes column for freeform info such as escalation instructions, payment notes, communication rules, staffing context, "
-        "or anything unique about the center."
-    )
-
+        if st.button("Save Table Changes"):
+            save_center_profiles(edited_df)
+            st.success("Saved")
+            st.rerun()
 
 # =========================
 # REPORT PAGE ENGINE
